@@ -1,66 +1,138 @@
 import pandas as pd
 import numpy as np
 
-#Merging the lead temperature and dormany logic into single reactivation engine while following best practices - vectorization, parameterization and modularization
-
-#defing function that categoriez leads into diff temperatures and dormancy
-
-"""
-Process CRM DataFrame for lead reactivation.
+def process_crm(
+    df: pd.DataFrame,
+    dormancy_days: int = 90,
+    temp_thresholds: list = [30, 90, 180],
+    score_thresholds: list = [30, 90, 180],
+    score_values: list = [80, 60, 40, 20]
+):
+    """
+    Process CRM DataFrame for lead reactivation.
 
     Parameters:
         df (pd.DataFrame): CRM data with 'Last_Contact_Date' and 'Lead_Type' columns
         dormancy_days (int): Days after which a lead is considered dormant
         temp_thresholds (list[int]): Upper bounds for Hot, Warm, Cold leads
                                      Example: [30, 90, 180]
+        score_thresholds (list[int]): Upper bounds for Lead Score calculation
+        score_values (list[int]): Lead Score values corresponding to thresholds
 
     Returns:
         df_processed (pd.DataFrame): Original df with added columns:
-                                     'Days_Since_Contact', 'Dormant', 'Lead_Temperature'
+                                     'Days_Since_Contact', 'Dormant', 
+                                     'Lead_Temperature', 'Lead_Score',
+                                     'Priority', 'Suggested_Action'
         buyer_dormant (pd.DataFrame): Dormant buyers
         seller_dormant (pd.DataFrame): Dormant sellers
-        summary (dict): Summary metrics
-"""
+        summary (dict): Summary metrics including lead temperature breakdown
+        follow_up_list (pd.DataFrame): Leads that need immediate follow-up
+    """
 
-def process_crm(df: pd.DataFrame, dormancy_days: int=90,temp_thresholds: list=[30,90,180]):
-    #Convert Last_Contact_date to datetime
-    df['Last_Contact_Date']=pd.to_datetime(df['Last_Contact_Date'],errors='coerce')
+    # ----------------------------
+    # 1️⃣ Convert dates & calculate inactivity
+    # ----------------------------
+    df['Last_Contact_Date'] = pd.to_datetime(df['Last_Contact_Date'], errors='coerce')
+    today = pd.Timestamp.today()
+    df['Days_Since_Contact'] = (today - df['Last_Contact_Date']).dt.days
 
-    #Calculate days since last contact
-    today=pd.Timestamp.today() #pulling today's date
-    df['Days_Since_Contact']=(today-df['Last_Contact_Date']).dt.days#implementing date property and days sub-property
+    # Determine Dormancy
+    df['Dormant'] = df['Days_Since_Contact'] > dormancy_days
 
-    #Determine Dormancy
-    df['Dormant']=df['Days_Since_Contact']>dormancy_days
-
-    #Determine Lead Temperature
-    conditions=[
-        df['Days_Since_Contact']<=temp_thresholds[0],#hot
-        (df['Days_Since_Contact']>temp_thresholds[0]) & (df['Days_Since_Contact']<=temp_thresholds[1]),#warm
-        (df['Days_Since_Contact']>temp_thresholds[1]) & (df['Days_Since_Contact']<=temp_thresholds[2]),#cold
-        df['Days_Since_Contact']>temp_thresholds[2]#frozen
+    # ----------------------------
+    # 2️⃣ Lead Temperature (Hot/Warm/Cold/Frozen)
+    # ----------------------------
+    temp_conditions = [
+        df['Days_Since_Contact'] <= temp_thresholds[0],  # Hot
+        (df['Days_Since_Contact'] > temp_thresholds[0]) & (df['Days_Since_Contact'] <= temp_thresholds[1]),  # Warm
+        (df['Days_Since_Contact'] > temp_thresholds[1]) & (df['Days_Since_Contact'] <= temp_thresholds[2]),  # Cold
+        df['Days_Since_Contact'] > temp_thresholds[2]   # Frozen
     ]
+    temp_choices = ['Hot', 'Warm', 'Cold', 'Frozen']
+    df['Lead_Temperature'] = np.select(temp_conditions, temp_choices, default='Unknown')
 
-    choices=['Hot','Warm','Cold','Frozen']
+    # ----------------------------
+    # 3️⃣ Lead Score (Vectorized)
+    # ----------------------------
+    score_conditions = [
+        df['Days_Since_Contact'] <= score_thresholds[0],
+        (df['Days_Since_Contact'] > score_thresholds[0]) & (df['Days_Since_Contact'] <= score_thresholds[1]),
+        (df['Days_Since_Contact'] > score_thresholds[1]) & (df['Days_Since_Contact'] <= score_thresholds[2]),
+        df['Days_Since_Contact'] > score_thresholds[2]
+    ]
+    df['Lead_Score'] = np.select(score_conditions, score_values, default=0)
 
-    df['Lead_Temperature']=np.select(conditions,choices,default='Unknown')#using np.select for vectorized lead temperature assignment, defaulting to 'Unknown' for any edge cases
+    # ----------------------------
+    # 4️⃣ Masks for vectorization
+    # ----------------------------
+    lead_type_lower = df['Lead_Type'].str.lower()
+    seller_mask = lead_type_lower == "seller"
+    buyer_mask = lead_type_lower == "buyer"
+    dormant_mask = df['Dormant']
 
-    #Segment dormant buyers and sellers
-    buyer_mask=df['Lead_Type'].str.contains('Buyer',case=False,na=False) #using str.contains for case insensitivity and handling NaN
-    seller_mask=df['Lead_Type'].str.contains('Seller',case=False,na=False)
+    # ----------------------------
+    # 5️⃣ Priority Logic
+    # ----------------------------
+    priority_conditions = [
+        seller_mask & dormant_mask,  # Dormant Sellers
+        dormant_mask                 # Dormant Buyers
+    ]
+    priority_choices = [
+        "High Priority",
+        "Medium Priority"
+    ]
+    df['Priority'] = np.select(priority_conditions, priority_choices, default="Low Priority")
 
-    buyer_dormant=df[buyer_mask &df['Dormant']]
-    seller_dormant=df[seller_mask &df['Dormant']]
+    # ----------------------------
+    # 6️⃣ Suggested Action (Lifecycle-Aware)
+    # ----------------------------
+    action_conditions = [
+        seller_mask & dormant_mask & (df['Lead_Temperature'] == "Hot"),
+        seller_mask & dormant_mask & (df['Lead_Temperature'] == "Warm"),
+        seller_mask & dormant_mask & (df['Lead_Temperature'] == "Cold"),
+        seller_mask & dormant_mask & (df['Lead_Temperature'] == "Frozen"),
 
-    #Summary Metrics, using .sum for calculating total dormant as that table stores boolean values, this way it will ignore the 0s and count only the 1s
-    summary={"total leads":len(df),"total dormant":int(df['Dormant'].sum()),"dormant buyers":len('buyer_dormant'),"dormant seller":len('seller_dormant')}
+        buyer_mask & dormant_mask & (df['Lead_Temperature'] == "Hot"),
+        buyer_mask & dormant_mask & (df['Lead_Temperature'] == "Warm"),
+        buyer_mask & dormant_mask & (df['Lead_Temperature'] == "Cold"),
+        buyer_mask & dormant_mask & (df['Lead_Temperature'] == "Frozen"),
+    ]
+    action_choices = [
+        "Call Immediately - Listing Opportunity",
+        "Personal Check-in Call",
+        "Send Market Update Email",
+        "Add to Long-Term Seller Nurture",
 
-    return df,buyer_dormant,seller_dormant,summary
+        "Send Active Listings + Call",
+        "Check Budget & Timeline",
+        "Send 'Still Searching?' Email",
+        "Add to Monthly Buyer Digest",
+    ]
+    df['Suggested_Action'] = np.select(action_conditions, action_choices, default="General Follow-Up")
 
+    # ----------------------------
+    # 7️⃣ Follow-Up List (Actionable Leads)
+    # ----------------------------
+    follow_up_list = df[df['Priority'] != "Low Priority"]
 
+    # ----------------------------
+    # 8️⃣ Segment Dormant Buyers & Sellers
+    # ----------------------------
+    buyer_dormant = df[buyer_mask & dormant_mask]
+    seller_dormant = df[seller_mask & dormant_mask]
 
+    # ----------------------------
+    # 9️⃣ Summary Metrics
+    # ----------------------------
+    temperature_counts = df['Lead_Temperature'].value_counts().to_dict()
+    summary = {
+        "Total Leads": len(df),
+        "Total Dormant": int(dormant_mask.sum()),
+        "Dormant Buyers": len(buyer_dormant),
+        "Dormant Sellers": len(seller_dormant),
+        "High Priority Leads": int((df['Priority'] == "High Priority").sum()),
+        "Lead Temperature Breakdown": temperature_counts
+    }
 
-
-
-
-
+    return df, buyer_dormant, seller_dormant, summary, follow_up_list
