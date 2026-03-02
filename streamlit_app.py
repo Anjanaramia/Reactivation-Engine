@@ -1,12 +1,12 @@
 import streamlit as st
-from Reactivation_Engine import process_crm
 import pandas as pd
+from Reactivation_Engine import process_crm  # your upgraded function
 
 # ----------------------------
 # 1️⃣ App Title
 # ----------------------------
-st.title("CRM Lead Reactivation Engine 🚀")
-st.write("Upload your CRM CSV to analyze lead dormancy, temperature, lead scoring, and follow-up actions.")
+st.title("CRM Lead Reactivation Engine v2 🚀")
+st.write("Upload your CRM CSV to analyze lead dormancy, reactivation score, and revenue potential.")
 
 # ----------------------------
 # 2️⃣ Upload CSV
@@ -22,11 +22,15 @@ if uploaded_file:
     st.sidebar.header("Settings")
     dormancy_days = st.sidebar.slider("Dormant after X days", 30, 180, 90)
 
-    # Hot < Warm < Cold
+    # Temperature thresholds
     hot_upper = st.sidebar.slider('Hot Upper Bound (days)', 1, 100, 30)
     warm_upper = st.sidebar.slider('Warm Upper Bound (days)', hot_upper + 1, 180, 90)
     cold_upper = st.sidebar.slider('Cold Upper Bound (days)', warm_upper + 1, 365, 180)
     temp_thresholds = [hot_upper, warm_upper, cold_upper]
+
+    # Revenue inputs
+    average_deal_value = st.sidebar.number_input("Average Deal Value ($)", 1000, 1000000, 50000)
+    estimated_reactivation_rate = st.sidebar.slider("Estimated Reactivation Rate (%)", 1, 50, 5)
 
     # ----------------------------
     # 4️⃣ Process CRM
@@ -34,42 +38,38 @@ if uploaded_file:
     df_processed, buyer_dormant, seller_dormant, summary, follow_up_list = process_crm(
         df,
         dormancy_days=dormancy_days,
-        temp_thresholds=temp_thresholds
+        temp_thresholds=temp_thresholds,
+        average_deal_value=average_deal_value,
+        estimated_reactivation_rate=estimated_reactivation_rate
     )
 
     # ----------------------------
-    # 5️⃣ Show Processed Data
+    # 5️⃣ Display Processed Data
     # ----------------------------
     st.subheader("Processed CRM Data")
     st.dataframe(df_processed)
 
     # ----------------------------
-    # 6️⃣ Follow-Up List (Actionable Leads)
+    # 6️⃣ Follow-Up List
     # ----------------------------
     with st.expander("Follow-Up List (High + Medium Priority Leads)"):
-        st.dataframe(follow_up_list[['Lead_Name','Lead_Type','Lead_Temperature','Lead_Score','Priority','Suggested_Action']])
+        st.dataframe(follow_up_list[['Lead_Name','Lead_Type','Lead_Temperature','Reactivation_Score','Priority','Suggested_Action','Potential_Revenue']])
 
     # ----------------------------
-    # 7️⃣ Suggested Actions for Leads
+    # 7️⃣ Top Leads by Reactivation Score
     # ----------------------------
-    with st.expander("Suggested Actions for Actionable Leads"):
-        st.dataframe(follow_up_list[['Lead_Name','Lead_Type','Lead_Temperature','Priority','Suggested_Action']])
+    st.subheader("Top Leads by Reactivation Score")
+    top_leads = follow_up_list.sort_values('Reactivation_Score', ascending=False).head(20)
+    st.dataframe(top_leads[['Lead_Name','Lead_Type','Days_Since_Contact','Lead_Temperature','Reactivation_Score','Priority','Suggested_Action','Potential_Revenue']])
 
     # ----------------------------
-    # 8️⃣ Lead Scoring / Top Leads
-    # ----------------------------
-    st.subheader("Top Leads by Lead Score")
-    top_leads = df_processed.sort_values('Lead_Score', ascending=False).head(20)
-    st.dataframe(top_leads[['Lead_Name','Lead_Type','Days_Since_Contact','Lead_Temperature','Lead_Score','Priority','Suggested_Action']])
-
-    # ----------------------------
-    # 9️⃣ Summary Metrics
+    # 8️⃣ Summary Metrics
     # ----------------------------
     st.subheader("Summary Metrics")
     st.write(summary)
 
     # ----------------------------
-    # 🔟 Charts for Visual Insights
+    # 9️⃣ Charts
     # ----------------------------
     st.subheader("Lead Temperature Distribution")
     st.bar_chart(df_processed['Lead_Temperature'].value_counts())
@@ -77,6 +77,8 @@ if uploaded_file:
     st.subheader("Lead Priority Distribution")
     st.bar_chart(df_processed['Priority'].value_counts())
 
+    st.subheader("Revenue Opportunity Distribution")
+    st.bar_chart(follow_up_list['Potential_Revenue'])
+
 else:
     st.info("Please upload a CSV file to process your CRM leads.")
-
