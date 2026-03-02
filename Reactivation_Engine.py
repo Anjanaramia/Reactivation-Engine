@@ -5,87 +5,75 @@ def process_crm(
     df: pd.DataFrame,
     dormancy_days: int = 90,
     temp_thresholds: list = [30, 90, 180],
-    score_thresholds: list = [30, 90, 180],
-    score_values: list = [80, 60, 40, 20]
+    average_deal_value: float = 50000,
+    estimated_reactivation_rate: float = 5
 ):
     """
-    Process CRM DataFrame for lead reactivation.
-
-    Parameters:
-        df (pd.DataFrame): CRM data with 'Last_Contact_Date' and 'Lead_Type' columns
-        dormancy_days (int): Days after which a lead is considered dormant
-        temp_thresholds (list[int]): Upper bounds for Hot, Warm, Cold leads
-                                     Example: [30, 90, 180]
-        score_thresholds (list[int]): Upper bounds for Lead Score calculation
-        score_values (list[int]): Lead Score values corresponding to thresholds
+    Process CRM DataFrame for advanced lead reactivation.
 
     Returns:
-        df_processed (pd.DataFrame): Original df with added columns:
-                                     'Days_Since_Contact', 'Dormant', 
-                                     'Lead_Temperature', 'Lead_Score',
-                                     'Priority', 'Suggested_Action'
-        buyer_dormant (pd.DataFrame): Dormant buyers
-        seller_dormant (pd.DataFrame): Dormant sellers
-        summary (dict): Summary metrics including lead temperature breakdown
-        follow_up_list (pd.DataFrame): Leads that need immediate follow-up
+        df_processed: Original df with additional columns
+        buyer_dormant: Dormant buyers
+        seller_dormant: Dormant sellers
+        summary: Summary metrics
+        follow_up_list: Leads needing immediate action
     """
 
     # ----------------------------
-    # 1️⃣ Convert dates & calculate inactivity
+    # 1️⃣ Convert dates & handle missing
     # ----------------------------
     df['Last_Contact_Date'] = pd.to_datetime(df['Last_Contact_Date'], errors='coerce')
     today = pd.Timestamp.today()
     df['Days_Since_Contact'] = (today - df['Last_Contact_Date']).dt.days
+    df['Days_Since_Contact'] = df['Days_Since_Contact'].fillna(9999)  # Treat missing as extremely dormant
 
-    # Determine Dormancy
+    # Dormancy
     df['Dormant'] = df['Days_Since_Contact'] > dormancy_days
 
     # ----------------------------
-    # 2️⃣ Lead Temperature (Hot/Warm/Cold/Frozen)
+    # 2️⃣ Lead Temperature
     # ----------------------------
     temp_conditions = [
         df['Days_Since_Contact'] <= temp_thresholds[0],  # Hot
         (df['Days_Since_Contact'] > temp_thresholds[0]) & (df['Days_Since_Contact'] <= temp_thresholds[1]),  # Warm
         (df['Days_Since_Contact'] > temp_thresholds[1]) & (df['Days_Since_Contact'] <= temp_thresholds[2]),  # Cold
-        df['Days_Since_Contact'] > temp_thresholds[2]   # Frozen
+        df['Days_Since_Contact'] > temp_thresholds[2]  # Frozen
     ]
     temp_choices = ['Hot', 'Warm', 'Cold', 'Frozen']
     df['Lead_Temperature'] = np.select(temp_conditions, temp_choices, default='Unknown')
 
     # ----------------------------
-    # 3️⃣ Lead Score (Vectorized)
-    # ----------------------------
-    score_conditions = [
-        df['Days_Since_Contact'] <= score_thresholds[0],
-        (df['Days_Since_Contact'] > score_thresholds[0]) & (df['Days_Since_Contact'] <= score_thresholds[1]),
-        (df['Days_Since_Contact'] > score_thresholds[1]) & (df['Days_Since_Contact'] <= score_thresholds[2]),
-        df['Days_Since_Contact'] > score_thresholds[2]
-    ]
-    df['Lead_Score'] = np.select(score_conditions, score_values, default=0)
-
-    # ----------------------------
-    # 4️⃣ Masks for vectorization
+    # 3️⃣ Reactivation Score (Weighted)
     # ----------------------------
     lead_type_lower = df['Lead_Type'].str.lower()
     seller_mask = lead_type_lower == "seller"
     buyer_mask = lead_type_lower == "buyer"
     dormant_mask = df['Dormant']
 
-    # ----------------------------
-    # 5️⃣ Priority Logic
-    # ----------------------------
-    priority_conditions = [
-        seller_mask & dormant_mask,  # Dormant Sellers
-        dormant_mask                 # Dormant Buyers
-    ]
-    priority_choices = [
-        "High Priority",
-        "Medium Priority"
-    ]
-    df['Priority'] = np.select(priority_conditions, priority_choices, default="Low Priority")
+    df['Reactivation_Score'] = 0
+
+    # Dormancy-based weighting
+    df.loc[df['Days_Since_Contact'] > 365, 'Reactivation_Score'] += 20  # Frozen
+    df.loc[df['Days_Since_Contact'] > 180, 'Reactivation_Score'] += 10  # Cold
+
+    # Lead type weighting
+    df.loc[seller_mask, 'Reactivation_Score'] += 10
+    df.loc[buyer_mask, 'Reactivation_Score'] += 5
+
+    # Dormant bonus
+    df.loc[dormant_mask, 'Reactivation_Score'] += 10
+
+    # Optional: more weighting (deal value, tags) can be added here
 
     # ----------------------------
-    # 6️⃣ Suggested Action (Lifecycle-Aware)
+    # 4️⃣ Priority Logic
+    # ----------------------------
+    df['Priority'] = 'Low Priority'
+    df.loc[df['Reactivation_Score'] >= 40, 'Priority'] = 'High Priority'
+    df.loc[(df['Reactivation_Score'] >= 20) & (df['Reactivation_Score'] < 40), 'Priority'] = 'Medium Priority'
+
+    # ----------------------------
+    # 5️⃣ Suggested Actions
     # ----------------------------
     action_conditions = [
         seller_mask & dormant_mask & (df['Lead_Temperature'] == "Hot"),
@@ -112,9 +100,18 @@ def process_crm(
     df['Suggested_Action'] = np.select(action_conditions, action_choices, default="General Follow-Up")
 
     # ----------------------------
-    # 7️⃣ Follow-Up List (Actionable Leads)
+    # 6️⃣ Follow-Up List
     # ----------------------------
-    follow_up_list = df[df['Priority'] != "Low Priority"]
+    follow_up_list = df[df['Priority'] != "Low Priority"].copy()
+
+    # ----------------------------
+    # 7️⃣ Revenue Opportunity Estimate
+    # ----------------------------
+    follow_up_list['Potential_Revenue'] = (
+        follow_up_list['Reactivation_Score'] / 100 *
+        average_deal_value *
+        (estimated_reactivation_rate / 100)
+    )
 
     # ----------------------------
     # 8️⃣ Segment Dormant Buyers & Sellers
@@ -132,7 +129,8 @@ def process_crm(
         "Dormant Buyers": len(buyer_dormant),
         "Dormant Sellers": len(seller_dormant),
         "High Priority Leads": int((df['Priority'] == "High Priority").sum()),
-        "Lead Temperature Breakdown": temperature_counts
+        "Lead Temperature Breakdown": temperature_counts,
+        "Estimated Revenue Opportunity": follow_up_list['Potential_Revenue'].sum()
     }
 
     return df, buyer_dormant, seller_dormant, summary, follow_up_list
