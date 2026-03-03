@@ -39,28 +39,16 @@ def process_crm(
     average_deal_value=50000,
     estimated_reactivation_rate=5
 ):
-
     df = standardize_columns(df)
 
     required_cols = ['Lead_Name', 'Lead_Type', 'Last_Contact_Date']
-
     for col in required_cols:
         if col not in df.columns:
             raise ValueError(f"Missing required column: {col}")
 
-    # Convert dates safely
-    df['Last_Contact_Date'] = pd.to_datetime(
-        df['Last_Contact_Date'], errors='coerce'
-    )
-
+    df['Last_Contact_Date'] = pd.to_datetime(df['Last_Contact_Date'], errors='coerce')
     today = pd.to_datetime("today")
-
-    df['Days_Since_Contact'] = (
-        today - df['Last_Contact_Date']
-    ).dt.days
-
-    # Prevent negative values (future dates)
-    df['Days_Since_Contact'] = df['Days_Since_Contact'].clip(lower=0)
+    df['Days_Since_Contact'] = (today - df['Last_Contact_Date']).dt.days.clip(lower=0)
 
     # Temperature Classification
     def classify(days):
@@ -77,12 +65,26 @@ def process_crm(
 
     df['Temperature'] = df['Days_Since_Contact'].apply(classify)
 
+    # Next Action Recommendations
+    def recommend_action(temp):
+        if temp == 'Hot':
+            return 'Call / Personalized Email'
+        elif temp == 'Warm':
+            return 'Email / SMS Follow-up'
+        elif temp == 'Cold':
+            return 'Nurture via Drip Campaign'
+        elif temp == 'Dormant':
+            return 'Skip for Now'
+        else:
+            return 'Check Lead Info'
+
+    df['Next_Action'] = df['Temperature'].apply(recommend_action)
+
     # Dormancy flag
     df['Is_Dormant'] = df['Days_Since_Contact'] > dormancy_days
 
     # Revenue Opportunity Calculation
     dormant_count = df['Is_Dormant'].sum()
-
     projected_reactivations = dormant_count * (estimated_reactivation_rate / 100)
     projected_revenue = projected_reactivations * average_deal_value
 
@@ -94,19 +96,14 @@ def process_crm(
     }
 
     # Buyer / Seller Split
-    buyer_dormant = df[
-        (df['Lead_Type'].str.lower() == 'buyer') &
-        (df['Is_Dormant'])
-    ]
+    buyer_dormant = df[(df['Lead_Type'].str.lower() == 'buyer') & df['Is_Dormant']]
+    seller_dormant = df[(df['Lead_Type'].str.lower() == 'seller') & df['Is_Dormant']]
 
-    seller_dormant = df[
-        (df['Lead_Type'].str.lower() == 'seller') &
-        (df['Is_Dormant'])
-    ]
+    # Follow-up priority list (sorted by longest inactivity)
+    follow_up_list = df[df['Is_Dormant']].sort_values(by='Days_Since_Contact', ascending=False)
 
-    follow_up_list = df[df['Is_Dormant']].sort_values(
-        by='Days_Since_Contact',
-        ascending=False
-    )
+    # Hot Leads for campaigns
+    hot_leads = df[df['Temperature'] == 'Hot']
 
-    return df, buyer_dormant, seller_dormant, summary, follow_up_list
+    # Return all enriched outputs
+    return df, buyer_dormant, seller_dormant, summary, follow_up_list, hot_leads
