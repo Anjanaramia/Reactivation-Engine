@@ -60,3 +60,18 @@ if uploaded_file:
         st.error("An error occurred while processing the CRM.")
         st.exception(e)
 
+# After processing:
+    df, buyer_dormant, seller_dormant, summary, follow_up_list, hot_leads = process_crm(df)
+
+    st.subheader("Follow-Up Priority List (Dormant Leads)")
+    st.dataframe(follow_up_list)  # Sorted by longest inactivity
+
+    st.subheader("Hot Leads (Ready for Call/Email)")
+    st.dataframe(hot_leads)
+    st.download_button(
+    label="Download Hot Leads for Campaign",
+    data=hot_leads.to_csv(index=False),
+    file_name='hot_leads.csv',
+    mime='text/csv'
+)
+
