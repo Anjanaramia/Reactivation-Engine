@@ -6,6 +6,7 @@ st.set_page_config(page_title="CRM Reactivation Engine V3", layout="wide")
 
 st.title("🚀 CRM Lead Reactivation Engine V3")
 
+# --- Sidebar Settings ---
 st.sidebar.header("Settings")
 
 dormancy_days = st.sidebar.slider("Dormant After X Days", 30, 365, 90)
@@ -21,14 +22,15 @@ estimated_reactivation_rate = st.sidebar.slider(
     "Estimated Reactivation Rate (%)", 1, 20, 5
 )
 
+# --- CSV Upload ---
 uploaded_file = st.file_uploader("Upload your CRM CSV", type=["csv"])
 
 if uploaded_file:
-
     try:
         df = pd.read_csv(uploaded_file)
 
-        df_processed, buyer_dormant, seller_dormant, summary, follow_up_list = process_crm(
+        # --- Process CRM using updated engine ---
+        df_processed, buyer_dormant, seller_dormant, summary, follow_up_list, hot_leads = process_crm(
             df,
             dormancy_days=dormancy_days,
             hot_upper=hot_upper,
@@ -40,38 +42,35 @@ if uploaded_file:
 
         st.success("CRM Processed Successfully ✅")
 
+        # --- Metrics ---
         col1, col2, col3, col4 = st.columns(4)
-
         col1.metric("Total Leads", summary["Total_Leads"])
         col2.metric("Dormant Leads", summary["Dormant_Leads"])
         col3.metric("Projected Reactivations", summary["Projected_Reactivations"])
         col4.metric("Projected Revenue ($)", summary["Projected_Revenue"])
 
-        st.subheader("📋 Follow-Up Priority List")
-        st.dataframe(follow_up_list)
+        # --- Follow-Up Priority List ---
+        st.subheader("📋 Follow-Up Priority List (Dormant Leads)")
+        st.dataframe(follow_up_list)  # Sorted by longest inactivity
 
+        # --- Dormant Buyers & Sellers ---
         st.subheader("🟢 Dormant Buyers")
         st.dataframe(buyer_dormant)
 
         st.subheader("🔵 Dormant Sellers")
         st.dataframe(seller_dormant)
 
+        # --- Hot Leads for Campaign ---
+        st.subheader("🟢 Hot Leads (Ready for Call/Email)")
+        st.dataframe(hot_leads)
+
+        st.download_button(
+            label="Download Hot Leads for Campaign",
+            data=hot_leads.to_csv(index=False),
+            file_name='hot_leads.csv',
+            mime='text/csv'
+        )
+
     except Exception as e:
         st.error("An error occurred while processing the CRM.")
         st.exception(e)
-
-# After processing:
-    df, buyer_dormant, seller_dormant, summary, follow_up_list, hot_leads = process_crm(df)
-
-    st.subheader("Follow-Up Priority List (Dormant Leads)")
-    st.dataframe(follow_up_list)  # Sorted by longest inactivity
-
-    st.subheader("Hot Leads (Ready for Call/Email)")
-    st.dataframe(hot_leads)
-    st.download_button(
-    label="Download Hot Leads for Campaign",
-    data=hot_leads.to_csv(index=False),
-    file_name='hot_leads.csv',
-    mime='text/csv'
-)
-
